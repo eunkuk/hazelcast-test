@@ -1,6 +1,7 @@
 package kr.com.hazelcasttest.controller;
 
 import kr.com.hazelcasttest.model.DistributedEvent;
+import kr.com.hazelcasttest.service.CallbackService;
 import kr.com.hazelcasttest.service.EventConsumerService;
 import kr.com.hazelcasttest.service.EventProducerService;
 import kr.com.hazelcasttest.service.ServerIdentificationService;
@@ -30,6 +31,7 @@ public class EventController {
     private final EventProducerService eventProducerService;
     private final EventConsumerService eventConsumerService;
     private final ServerIdentificationService serverIdentificationService;
+    private final CallbackService callbackService;
 
     /**
      * 서버 정보 조회
@@ -46,7 +48,7 @@ public class EventController {
     }
 
     /**
-     * 이벤트 생성
+     * 이벤트 생성 (기본 버전)
      *
      * @param eventType 이벤트 유형
      * @param payload   이벤트 데이터
@@ -58,6 +60,43 @@ public class EventController {
             @RequestParam String payload) {
         log.info("이벤트 생성 요청: 유형={}, 데이터={}", eventType, payload);
         DistributedEvent event = eventProducerService.produceEvent(eventType, payload);
+        return ResponseEntity.ok(event);
+    }
+
+    /**
+     * 이벤트 생성 (확장 버전)
+     *
+     * @param eventType 이벤트 유형
+     * @param payload 이벤트 데이터
+     * @param notificationUrl 알림 URL
+     * @param callbackHeaders 콜백 헤더
+     * @param messageGroupId 메시지 그룹 ID
+     * @param deduplicationId 중복 제거 ID
+     * @param maxRetries 최대 재시도 횟수
+     * @param retryDelayMs 재시도 지연 시간 (밀리초)
+     * @param visibilityTimeoutMs 가시성 타임아웃 (밀리초)
+     * @return 생성된 이벤트
+     */
+    @PostMapping("/advanced")
+    public ResponseEntity<DistributedEvent> createAdvancedEvent(
+            @RequestParam String eventType,
+            @RequestParam String payload,
+            @RequestParam(required = false) String notificationUrl,
+            @RequestParam(required = false) Map<String, String> callbackHeaders,
+            @RequestParam(required = false) String messageGroupId,
+            @RequestParam(required = false) String deduplicationId,
+            @RequestParam(required = false, defaultValue = "3") int maxRetries,
+            @RequestParam(required = false, defaultValue = "5000") long retryDelayMs,
+            @RequestParam(required = false, defaultValue = "30000") long visibilityTimeoutMs) {
+
+        log.info("고급 이벤트 생성 요청: 유형={}, 알림URL={}, 중복제거ID={}",
+                eventType, notificationUrl, deduplicationId);
+
+        DistributedEvent event = eventProducerService.produceEvent(
+                eventType, payload, notificationUrl, callbackHeaders,
+                messageGroupId, deduplicationId, maxRetries,
+                retryDelayMs, visibilityTimeoutMs);
+
         return ResponseEntity.ok(event);
     }
 
@@ -88,8 +127,34 @@ public class EventController {
         info.put("queueSize", eventProducerService.getQueueSize());
         info.put("processedEvents", eventConsumerService.getProcessedEventCount());
         info.put("failedEvents", eventConsumerService.getFailedEventCount());
+        info.put("callbackFailedEvents", eventConsumerService.getCallbackFailedCount());
+        info.put("callbackRetryQueueSize", callbackService.getCallbackRetryQueueSize());
         info.put("statistics", eventConsumerService.getStatistics());
         return ResponseEntity.ok(info);
+    }
+
+    /**
+     * 콜백 실패 이벤트 재시도
+     *
+     * @param eventId 이벤트 ID
+     * @return 재시도 결과
+     */
+    @PostMapping("/retry-callback/{eventId}")
+    public ResponseEntity<Map<String, Object>> retryCallback(@PathVariable String eventId) {
+        Map<String, Object> result = new HashMap<>();
+
+        boolean success = callbackService.retryCallback(eventId);
+
+        if (success) {
+            result.put("success", true);
+            result.put("message", "콜백 재시도가 예약되었습니다.");
+            result.put("eventId", eventId);
+            return ResponseEntity.ok(result);
+        } else {
+            result.put("success", false);
+            result.put("message", "콜백 재시도 실패: 이벤트가 없거나 콜백 실패 상태가 아닙니다.");
+            return ResponseEntity.badRequest().body(result);
+        }
     }
 
     /**
