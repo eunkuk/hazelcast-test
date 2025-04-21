@@ -1,0 +1,70 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'kr.com.hazelcasttest'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '17'
+
+// Set UTF-8 as the default encoding for Java compilation
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+// Set UTF-8 as the default encoding for Javadoc
+tasks.withType(Javadoc) {
+    options.encoding = 'UTF-8'
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    vertxVersion = '4.4.6'
+    hazelcastVersion = '5.3.6'
+}
+
+dependencies {
+    // Vert.x Core
+    implementation "io.vertx:vertx-core:${vertxVersion}"
+    implementation "io.vertx:vertx-web:${vertxVersion}"
+
+    // Vert.x Hazelcast Cluster Manager
+    implementation "io.vertx:vertx-hazelcast:${vertxVersion}"
+
+    // Hazelcast
+    implementation "com.hazelcast:hazelcast:${hazelcastVersion}"
+
+    // JSON
+    implementation "io.vertx:vertx-web-client:${vertxVersion}"
+    implementation "io.vertx:vertx-json-schema:${vertxVersion}"
+
+    // Logging
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'ch.qos.logback:logback-classic:1.4.11'
+
+    // Lombok for reducing boilerplate
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+    testImplementation "io.vertx:vertx-junit5:${vertxVersion}"
+}
+
+application {
+    mainClass.set('kr.com.hazelcasttest.vertx.MainVerticle')
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Custom task to run the application (renamed to avoid conflict)
+task customRun(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'kr.com.hazelcasttest.vertx.MainVerticle'
+}

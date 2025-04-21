@@ -262,7 +262,8 @@ src/main/java/kr/com/hazelcasttest/
 └── service/
     ├── ServerIdentificationService.java  # 서버 식별 서비스
     ├── EventProducerService.java         # 이벤트 생성 서비스
-    └── EventConsumerService.java         # 이벤트 소비 서비스
+    ├── EventConsumerService.java         # 이벤트 소비 서비스
+    └── CallbackService.java              # 콜백 처리 서비스
 ```
 
 ## 주의사항

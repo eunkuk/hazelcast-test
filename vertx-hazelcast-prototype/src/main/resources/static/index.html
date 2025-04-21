@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vert.x + Hazelcast 분산 이벤트 시스템</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            padding-bottom: 40px;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .card {
+            margin-bottom: 20px;
+        }
+        #eventList {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .event-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .event-created { background-color: #f8f9fa; }
+        .event-queued { background-color: #e2f0fd; }
+        .event-processing { background-color: #fff3cd; }
+        .event-completed { background-color: #d1e7dd; }
+        .event-failed { background-color: #f8d7da; }
+        .chart-container {
+            height: 300px;
+            margin-bottom: 20px;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .framework-badge {
+            font-size: 0.9rem;
+            padding: 0.25rem 0.5rem;
+            margin-left: 10px;
+            background-color: #6f42c1;
+            color: white;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">
+            Vert.x + Hazelcast 분산 이벤트 시스템
+            <span class="framework-badge">Vert.x</span>
+        </h1>
+
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>서버 정보</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="serverInfo">로딩 중...</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h5>이벤트 생성</h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="nav nav-tabs" id="eventTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="basic-tab" data-bs-toggle="tab" data-bs-target="#basic" type="button" role="tab" aria-controls="basic" aria-selected="true">기본</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="advanced-tab" data-bs-toggle="tab" data-bs-target="#advanced" type="button" role="tab" aria-controls="advanced" aria-selected="false">고급 (SQS 스타일)</button>
+                            </li>
+                        </ul>
+                        <div class="tab-content pt-3" id="eventTabsContent">
+                            <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
+                                <form id="eventForm">
+                                    <div class="mb-3">
+                                        <label for="eventType" class="form-label">이벤트 유형</label>
+                                        <select class="form-select" id="eventType">
+                                            <option value="NOTIFICATION">알림 (빠른 처리)</option>
+                                            <option value="DATA_PROCESSING">데이터 처리 (중간 처리)</option>
+                                            <option value="HEAVY_TASK">무거운 작업 (느린 처리)</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="payload" class="form-label">이벤트 데이터</label>
+                                        <textarea class="form-control" id="payload" rows="3">{"message": "테스트 메시지", "timestamp": 1650000000000}</textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">이벤트 생성</button>
+                                </form>
+                            </div>
+                            <div class="tab-pane fade" id="advanced" role="tabpanel" aria-labelledby="advanced-tab">
+                                <form id="advancedEventForm">
+                                    <div class="mb-3">
+                                        <label for="advEventType" class="form-label">이벤트 유형</label>
+                                        <select class="form-select" id="advEventType">
+                                            <option value="NOTIFICATION">알림 (빠른 처리)</option>
+                                            <option value="DATA_PROCESSING">데이터 처리 (중간 처리)</option>
+                                            <option value="HEAVY_TASK">무거운 작업 (느린 처리)</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="advPayload" class="form-label">이벤트 데이터</label>
+                                        <textarea class="form-control" id="advPayload" rows="3">{"message": "테스트 메시지", "timestamp": 1650000000000}</textarea>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="notificationUrl" class="form-label">알림 URL</label>
+                                        <input type="url" class="form-control" id="notificationUrl" placeholder="https://example.com/notification">
+                                        <div class="form-text">이벤트 처리 완료 시 호출할 URL</div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="callbackHeaders" class="form-label">콜백 헤더</label>
+                                        <textarea class="form-control" id="callbackHeaders" rows="2" placeholder='{"Authorization": "Bearer token", "Content-Type": "application/json"}'></textarea>
+                                        <div class="form-text">JSON 형식의 헤더 (선택사항)</div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label for="messageGroupId" class="form-label">메시지 그룹 ID</label>
+                                            <input type="text" class="form-control" id="messageGroupId" placeholder="group-123">
+                                            <div class="form-text">FIFO 처리를 위한 그룹 식별자</div>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label for="deduplicationId" class="form-label">중복 제거 ID</label>
+                                            <input type="text" class="form-control" id="deduplicationId" placeholder="dedup-123">
+                                            <div class="form-text">중복 방지를 위한 식별자</div>
+                                        </div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-md-4 mb-3">
+                                            <label for="maxRetries" class="form-label">최대 재시도 횟수</label>
+                                            <input type="number" class="form-control" id="maxRetries" value="3" min="0" max="10">
+                                        </div>
+                                        <div class="col-md-4 mb-3">
+                                            <label for="retryDelayMs" class="form-label">재시도 지연 (ms)</label>
+                                            <input type="number" class="form-control" id="retryDelayMs" value="5000" min="0">
+                                        </div>
+                                        <div class="col-md-4 mb-3">
+                                            <label for="visibilityTimeoutMs" class="form-label">가시성 타임아웃 (ms)</label>
+                                            <input type="number" class="form-control" id="visibilityTimeoutMs" value="30000" min="0">
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">고급 이벤트 생성</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h5>성능 테스트</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="performanceTestForm">
+                            <div class="mb-3">
+                                <label for="testEventCount" class="form-label">이벤트 수</label>
+                                <input type="number" class="form-control" id="testEventCount" value="1000">
+                            </div>
+                            <div class="mb-3">
+                                <label for="testEventType" class="form-label">이벤트 유형</label>
+                                <select class="form-select" id="testEventType">
+                                    <option value="NOTIFICATION">알림 (빠른 처리)</option>
+                                    <option value="DATA_PROCESSING">데이터 처리 (중간 처리)</option>
+                                    <option value="HEAVY_TASK">무거운 작업 (느린 처리)</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-warning">성능 테스트 실행</button>
+                        </form>
+                        <div class="mt-3">
+                            <h6>테스트 결과</h6>
+                            <pre id="testResults">아직 테스트가 실행되지 않았습니다.</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>큐 상태</h5>
+                        <button id="refreshQueueInfo" class="btn btn-sm btn-outline-secondary">새로고침</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h3 id="queueSize">0</h3>
+                                        <p class="card-text">큐 크기</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h3 id="processedEvents">0</h3>
+                                        <p class="card-text">처리된 이벤트</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h3 id="failedEvents">0</h3>
+                                        <p class="card-text">처리 실패</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h3 id="callbackFailedEvents">0</h3>
+                                        <p class="card-text">콜백 실패</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-2">
+                            <div class="col-md-12">
+                                <div class="card text-center">
+                                    <div class="card-body">
+                                        <h3 id="callbackRetryQueueSize">0</h3>
+                                        <p class="card-text">콜백 재시도 큐</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <p id="statistics">통계 정보 로딩 중...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>이벤트 목록</h5>
+                        <div>
+                            <button id="clearEvents" class="btn btn-sm btn-outline-danger me-2">목록 지우기</button>
+                            <button id="refreshEvents" class="btn btn-sm btn-outline-secondary">새로고침</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="eventList" class="mt-3">
+                            <p class="text-center text-muted">이벤트를 생성하면 여기에 표시됩니다.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Vert.x vs Spring Boot 비교</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>이 애플리케이션은 Spring Boot 버전에서 Vert.x로 마이그레이션되었습니다. 주요 차이점:</p>
+                        <div class="table-responsive">
+                            <table class="table table-bordered">
+                                <thead>
+                                    <tr>
+                                        <th>특성</th>
+                                        <th>Spring Boot</th>
+                                        <th>Vert.x</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>아키텍처</td>
+                                        <td>멀티스레드 블로킹 I/O</td>
+                                        <td>이벤트 루프 기반 논블로킹 I/O</td>
+                                    </tr>
+                                    <tr>
+                                        <td>동시성 모델</td>
+                                        <td>스레드 풀 기반</td>
+                                        <td>이벤트 루프 + 워커 버티클</td>
+                                    </tr>
+                                    <tr>
+                                        <td>통신 방식</td>
+                                        <td>직접 메서드 호출</td>
+                                        <td>이벤트 버스 기반 메시지 전달</td>
+                                    </tr>
+                                    <tr>
+                                        <td>확장성</td>
+                                        <td>수직적 확장에 적합</td>
+                                        <td>수평적 확장에 더 적합</td>
+                                    </tr>
+                                    <tr>
+                                        <td>리소스 사용</td>
+                                        <td>상대적으로 높은 메모리 사용</td>
+                                        <td>적은 메모리 사용, 효율적인 리소스 활용</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 이벤트 목록 저장
+        const events = [];
+
+        // 페이지 로드 시 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            // 서버 정보 로드
+            loadServerInfo();
+
+            // 큐 정보 로드
+            loadQueueInfo();
+
+            // 이벤트 폼 제출 처리
+            document.getElementById('eventForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                createEvent();
+            });
+
+            // 고급 이벤트 폼 제출 처리
+            document.getElementById('advancedEventForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                createAdvancedEvent();
+            });
+
+            // 성능 테스트 폼 제출 처리
+            document.getElementById('performanceTestForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                runPerformanceTest();
+            });
+
+            // 큐 정보 새로고침
+            document.getElementById('refreshQueueInfo').addEventListener('click', loadQueueInfo);
+
+            // 이벤트 목록 새로고침
+            document.getElementById('refreshEvents').addEventListener('click', function() {
+                refreshEventList();
+            });
+
+            // 이벤트 목록 지우기
+            document.getElementById('clearEvents').addEventListener('click', function() {
+                events.length = 0;
+                refreshEventList();
+            });
+
+            // 주기적으로 큐 정보 업데이트 (5초마다)
+            setInterval(loadQueueInfo, 5000);
+        });
+
+        // 서버 정보 로드
+        function loadServerInfo() {
+            fetch('/api/events/server-info')
+                .then(response => response.json())
+                .then(data => {
+                    const serverInfoDiv = document.getElementById('serverInfo');
+                    serverInfoDiv.innerHTML = `
+                        <p><strong>서버 ID:</strong> ${data.serverId}</p>
+                        <p><strong>호스트:</strong> ${data.serverHost}</p>
+                        <p><strong>정보:</strong> ${data.serverInfo}</p>
+                    `;
+                })
+                .catch(error => {
+                    console.error('서버 정보 로드 오류:', error);
+                    document.getElementById('serverInfo').innerHTML = '서버 정보를 가져오는 중 오류가 발생했습니다.';
+                });
+        }
+
+        // 큐 정보 로드
+        function loadQueueInfo() {
+            fetch('/api/events/queue-info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('queueSize').textContent = data.queueSize || 0;
+                    document.getElementById('processedEvents').textContent = data.processedEvents || 0;
+                    document.getElementById('failedEvents').textContent = data.failedEvents || 0;
+                    document.getElementById('callbackFailedEvents').textContent = data.callbackFailedEvents || 0;
+                    document.getElementById('callbackRetryQueueSize').textContent = data.callbackRetryQueueSize || 0;
+                    document.getElementById('statistics').textContent = data.statistics;
+                })
+                .catch(error => {
+                    console.error('큐 정보 로드 오류:', error);
+                });
+        }
+
+        // 이벤트 생성
+        function createEvent() {
+            const eventType = document.getElementById('eventType').value;
+            const payload = document.getElementById('payload').value;
+
+            const params = new URLSearchParams();
+            params.append('eventType', eventType);
+            params.append('payload', payload);
+
+            fetch('/api/events?' + params.toString(), {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('이벤트 생성됨:', data);
+                events.unshift(data); // 목록 맨 앞에 추가
+                refreshEventList();
+
+                // 이벤트 상태 주기적으로 업데이트
+                scheduleEventStatusUpdate(data.eventId);
+            })
+            .catch(error => {
+                console.error('이벤트 생성 오류:', error);
+                alert('이벤트 생성 중 오류가 발생했습니다.');
+            });
+        }
+
+        // 고급 이벤트 생성
+        function createAdvancedEvent() {
+            const eventType = document.getElementById('advEventType').value;
+            const payload = document.getElementById('advPayload').value;
+            const notificationUrl = document.getElementById('notificationUrl').value;
+            const callbackHeadersText = document.getElementById('callbackHeaders').value;
+            const messageGroupId = document.getElementById('messageGroupId').value;
+            const deduplicationId = document.getElementById('deduplicationId').value;
+            const maxRetries = document.getElementById('maxRetries').value;
+            const retryDelayMs = document.getElementById('retryDelayMs').value;
+            const visibilityTimeoutMs = document.getElementById('visibilityTimeoutMs').value;
+
+            const params = new URLSearchParams();
+            params.append('eventType', eventType);
+            params.append('payload', payload);
+
+            if (notificationUrl) {
+                params.append('notificationUrl', notificationUrl);
+            }
+
+            if (callbackHeadersText) {
+                try {
+                    const callbackHeaders = JSON.parse(callbackHeadersText);
+                    for (const [key, value] of Object.entries(callbackHeaders)) {
+                        params.append(`callbackHeaders['${key}']`, value);
+                    }
+                } catch (e) {
+                    console.error('콜백 헤더 JSON 파싱 오류:', e);
+                    alert('콜백 헤더 형식이 올바르지 않습니다. 유효한 JSON 형식으로 입력해주세요.');
+                    return;
+                }
+            }
+
+            if (messageGroupId) {
+                params.append('messageGroupId', messageGroupId);
+            }
+
+            if (deduplicationId) {
+                params.append('deduplicationId', deduplicationId);
+            }
+
+            params.append('maxRetries', maxRetries);
+            params.append('retryDelayMs', retryDelayMs);
+            params.append('visibilityTimeoutMs', visibilityTimeoutMs);
+
+            fetch('/api/events/advanced?' + params.toString(), {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('고급 이벤트 생성됨:', data);
+                events.unshift(data); // 목록 맨 앞에 추가
+                refreshEventList();
+
+                // 이벤트 상태 주기적으로 업데이트
+                scheduleEventStatusUpdate(data.eventId);
+
+                // 성공 메시지 표시
+                alert('고급 이벤트가 성공적으로 생성되었습니다.');
+            })
+            .catch(error => {
+                console.error('고급 이벤트 생성 오류:', error);
+                alert('고급 이벤트 생성 중 오류가 발생했습니다.');
+            });
+        }
+
+        // 이벤트 상태 업데이트 스케줄링
+        function scheduleEventStatusUpdate(eventId) {
+            // 처음 1초 후 업데이트
+            setTimeout(() => updateEventStatus(eventId), 1000);
+
+            // 그 다음 3초 후 업데이트
+            setTimeout(() => updateEventStatus(eventId), 4000);
+
+            // 마지막으로 10초 후 업데이트
+            setTimeout(() => updateEventStatus(eventId), 10000);
+        }
+
+        // 이벤트 상태 업데이트
+        function updateEventStatus(eventId) {
+            fetch(`/api/events/${eventId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('이벤트를 찾을 수 없습니다.');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // 이벤트 목록에서 해당 이벤트 찾아 업데이트
+                    const index = events.findIndex(e => e.eventId === eventId);
+                    if (index !== -1) {
+                        events[index] = data;
+                        refreshEventList();
+                    }
+                })
+                .catch(error => {
+                    console.error(`이벤트 상태 업데이트 오류 (${eventId}):`, error);
+                });
+        }
+
+        // 이벤트 목록 새로고침
+        function refreshEventList() {
+            const eventListDiv = document.getElementById('eventList');
+
+            if (events.length === 0) {
+                eventListDiv.innerHTML = '<p class="text-center text-muted">이벤트를 생성하면 여기에 표시됩니다.</p>';
+                return;
+            }
+
+            let html = '';
+
+            events.forEach(event => {
+                // 이벤트 상태에 따른 스타일 클래스
+                let statusClass = 'event-created';
+                switch (event.status) {
+                    case 'QUEUED': statusClass = 'event-queued'; break;
+                    case 'PROCESSING': statusClass = 'event-processing'; break;
+                    case 'COMPLETED': statusClass = 'event-completed'; break;
+                    case 'FAILED': statusClass = 'event-failed'; break;
+                    case 'CALLBACK_FAILED': statusClass = 'event-failed'; break;
+                }
+
+                // SQS 스타일 필드 표시 준비
+                let sqsFields = '';
+                if (event.notificationUrl) {
+                    sqsFields += `<div>알림 URL: ${event.notificationUrl}</div>`;
+                }
+                if (event.messageGroupId) {
+                    sqsFields += `<div>메시지 그룹: ${event.messageGroupId}</div>`;
+                }
+                if (event.deduplicationId) {
+                    sqsFields += `<div>중복 제거 ID: ${event.deduplicationId}</div>`;
+                }
+                if (event.retryCount > 0) {
+                    sqsFields += `<div>재시도: ${event.retryCount}/${event.maxRetries}</div>`;
+                }
+
+                // 추가 정보가 있는 경우 접을 수 있는 섹션 추가
+                const hasAdvancedInfo = sqsFields !== '';
+
+                // 콜백 실패 이벤트인 경우 재시도 버튼 추가
+                const isCallbackFailed = event.status === 'CALLBACK_FAILED';
+
+                html += `
+                    <div class="event-item ${statusClass}">
+                        <div class="d-flex justify-content-between">
+                            <strong>${event.eventType}</strong>
+                            <span class="badge ${isCallbackFailed ? 'bg-danger' : 'bg-secondary'}">${event.status}</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <div>ID: ${event.eventId}</div>
+                            ${isCallbackFailed ? `
+                            <button class="btn btn-sm btn-warning" onclick="retryCallback('${event.eventId}')">
+                                콜백 재시도
+                            </button>` : ''}
+                        </div>
+                        <div>생성: ${formatDateTime(event.createdAt)}</div>
+                        ${event.processedAt ? `<div>처리: ${formatDateTime(event.processedAt)}</div>` : ''}
+                        <div>소스 서버: ${event.sourceServerId || 'N/A'}</div>
+                        ${event.processingServerId ? `<div>처리 서버: ${event.processingServerId}</div>` : ''}
+
+                        ${hasAdvancedInfo ? `
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-outline-secondary" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#details-${event.eventId}"
+                                    aria-expanded="false">
+                                고급 정보 ${event.notificationUrl ? '(알림 포함)' : ''}
+                            </button>
+                            <div class="collapse mt-2" id="details-${event.eventId}">
+                                <div class="card card-body py-2 px-3">
+                                    ${sqsFields}
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        <div class="mt-2">
+                            <small>${event.payload}</small>
+                        </div>
+                    </div>
+                `;
+            });
+
+            eventListDiv.innerHTML = html;
+        }
+
+        // 성능 테스트 실행
+        function runPerformanceTest() {
+            const count = document.getElementById('testEventCount').value;
+            const eventType = document.getElementById('testEventType').value;
+
+            document.getElementById('testResults').textContent = '테스트 실행 중...';
+
+            const params = new URLSearchParams();
+            params.append('count', count);
+            params.append('eventType', eventType);
+
+            fetch('/api/events/performance-test?' + params.toString(), {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('성능 테스트 결과:', data);
+
+                // 결과 표시
+                document.getElementById('testResults').textContent =
+                    JSON.stringify(data, null, 2);
+
+                // 큐 정보 업데이트
+                loadQueueInfo();
+            })
+            .catch(error => {
+                console.error('성능 테스트 오류:', error);
+                document.getElementById('testResults').textContent =
+                    '성능 테스트 중 오류가 발생했습니다: ' + error.message;
+            });
+        }
+
+        // 콜백 재시도 함수
+        function retryCallback(eventId) {
+            if (!confirm('콜백을 재시도하시겠습니까?')) {
+                return;
+            }
+
+            fetch(`/api/events/retry-callback/${eventId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('콜백 재시도가 예약되었습니다.');
+                    // 이벤트 상태 업데이트
+                    updateEventStatus(eventId);
+                    // 큐 정보 업데이트
+                    loadQueueInfo();
+                } else {
+                    alert(`콜백 재시도 실패: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('콜백 재시도 오류:', error);
+                alert('콜백 재시도 중 오류가 발생했습니다.');
+            });
+        }
+
+        // 날짜 포맷팅 함수
+        function formatDateTime(dateTimeStr) {
+            if (!dateTimeStr) return 'N/A';
+
+            try {
+                const date = new Date(dateTimeStr.replace(/\[.*\]$/, ''));
+                return date.toLocaleString();
+            } catch (e) {
+                return dateTimeStr;
+            }
+        }
+    </script>
